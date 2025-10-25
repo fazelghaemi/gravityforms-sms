@@ -1,11 +1,11 @@
 <?php
 /*
-Plugin Name: پیامک گرویتی فرم
-Description: The most comprehensive SMS plugin for Gravity Forms
+Plugin Name:  پیامک گرویتی فرم راه پیام
+Description: جامع‌ترین افزونه پیامک برای Gravity Forms
 Version: 1.1
-Plugin URI: https://wordpress.org/plugins/persian-gravity-sms-pro/
-Author: گرویتی فرم فارسی
-Author URI: https://profiles.wordpress.org/persiangravityforms/
+Plugin URI: https://readystudio.ir/persian-gravity-sms-pro/
+Author: فاضل قائمی
+Author URI: https://readystudio.ir/
 Text Domain: GF_SMS
 Domain Path: /languages/
 */
