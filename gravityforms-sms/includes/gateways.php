@@ -7,16 +7,14 @@ if ( ! class_exists( 'GFHANNANSMS_Pro_WebServices' ) ) {
 	class GFHANNANSMS_Pro_WebServices {
 
 		public static function get() {
-			return apply_filters( 'gf_sms_gateways', array( 'no' => __( 'Select a Gateway', 'GF_SMS' ) ) );
+			// Removed the 'no' => 'Select' option. MsgWay will be added by the filter.
+			return apply_filters( 'gf_sms_gateways', array() );
 		}
 
 		public static function action( $settings, $action, $from, $to, $messages ) {
 
-			$gateway = isset( $settings["ws"] ) ? $settings["ws"] : '';
-
-			if ( empty( $gateway ) || $gateway == 'no' ) {
-				return __( 'No Gateway found.', 'GF_SMS' );
-			}
+			// Hard-code the gateway to msgway
+			$gateway = 'msgway';
 
 			$GATEWAY = strtoupper( $gateway );
 			$Gateway = 'GFHANNANSMS_Pro_' . $GATEWAY;
@@ -29,8 +27,9 @@ if ( ! class_exists( 'GFHANNANSMS_Pro_WebServices' ) ) {
 			), $messages );
 			$messages = strip_tags( $messages );
 
-			if ( ! class_exists( $Gateway ) && file_exists( GF_SMS_GATEWAY . strtolower( $gateway ) . '.php' ) ) {
-				require_once( GF_SMS_GATEWAY . strtolower( $gateway ) . '.php' );
+			// Check and include our hard-coded gateway file
+			if ( ! class_exists( $Gateway ) && file_exists( GF_SMS_GATEWAY . 'msgway.php' ) ) {
+				require_once( GF_SMS_GATEWAY . 'msgway.php' );
 			}
 
 			if ( class_exists( $Gateway ) && method_exists( $Gateway, 'process' ) ) {
@@ -51,7 +50,8 @@ if ( ! class_exists( 'GFHANNANSMS_Pro_WebServices' ) ) {
 				return $result;
 			}
 
-			return __( 'No Gateway found.', 'GF_SMS' );
+			return __( 'MsgWay Gateway not found.', 'GF_SMS' ); // Changed error message
 		}
 	}
 }
+

@@ -79,7 +79,7 @@ class GFHANNANSMS_Pro {
 			RGForms::add_settings_page( array(
 					'name'      => 'gf_sms_pro',
 					'tab_label' => __( 'SMS Settings', 'GF_SMS' ),
-					'title'     => __( 'Gravityforms SMS Pro', 'GF_SMS' ),
+					'title'     => __( 'Ready Studio SMS', 'GF_SMS' ), // Rebranded
 					'handler'   => array( 'GFHANNANSMS_Pro_Settings', 'settings' ),
 				)
 			);
@@ -138,7 +138,7 @@ class GFHANNANSMS_Pro {
 		if ( ! empty( $permission ) ) {
 			$submenus[] = array(
 				"name"       => "gf_hannansms",
-				"label"      => __( "SMS Notification", "GF_SMS" ),
+				"label"      => __( "پیامک (Ready Studio)", "GF_SMS" ), // Rebranded
 				"callback"   => array( __CLASS__, "pages" ),
 				"permission" => $permission
 			);
@@ -197,7 +197,7 @@ class GFHANNANSMS_Pro {
 		$menu_id = 'GF_SMS';
 		$wp_admin_bar->add_menu( array(
 			'id'    => $menu_id,
-			'title' => ( __( 'GF SMS', 'GF_SMS' ) . $balance ),
+			'title' => ( __( 'Ready SMS', 'GF_SMS' ) . $balance ), // Rebranded
 			'href'  => 'admin.php?page=gf_settings&subview=gf_sms_pro'
 		) );
 		$wp_admin_bar->add_menu( array(
@@ -249,6 +249,11 @@ class GFHANNANSMS_Pro {
 	public static function range() {
 		$settings = self::get_option();
 
+		// Ensure gateways class is loaded before calling action
+		if ( ! class_exists( 'GFHANNANSMS_Pro_WebServices' ) ) {
+			require_once( GF_SMS_DIR . 'includes/gateways.php' );
+		}
+
 		return GFHANNANSMS_Pro_WebServices::action( $settings, "range", '', '', '' );
 	}
 
@@ -259,6 +264,13 @@ class GFHANNANSMS_Pro {
 		} else if ( ! empty( self::$stored_credit ) ) {
 			return self::$stored_credit;
 		}
+
+		// --- FATAL ERROR FIX ---
+		// Ensure the WebServices class is loaded before trying to use it.
+		if ( ! class_exists( 'GFHANNANSMS_Pro_WebServices' ) ) {
+			require_once( GF_SMS_DIR . 'includes/gateways.php' );
+		}
+		// --- END FIX ---
 
 		$settings            = self::get_option();
 		self::$stored_credit = GFHANNANSMS_Pro_WebServices::action( $settings, "credit", '', '', '' );
@@ -306,8 +318,9 @@ class GFHANNANSMS_Pro {
 
 	public static function admin_notice() {
 		$class   = 'notice notice-success gf_sms_pro_notice is-dismissible';
+		$message = sprintf( __( 'از افزونه پیامک %s لذت می‌برید؟', 'GF_SMS' ), 'Ready Studio' ); // Rebranded
 		$message .= '<hr>';
-		$message .= sprintf( __( 'Do you ❤️ "Persian Gravity Forms SMS Pro"? Please Rate 5 Stars on %sWordpress.org%s', 'GF_SMS' ), '<a target="_blank" href="https://wordpress.org/plugins/persian-gravity-sms-pro">', '</a>' );
+		$message .= sprintf( __( 'لطفا به ما در %sWordPress.org%s امتیاز دهید.', 'GF_SMS' ), '<a target="_blank" href="https://wordpress.org/plugins/persian-gravity-sms-pro">', '</a>' ); // Kept old link
 
 		printf( '<div class="%1$s"><p>%2$s</p></div>', $class, $message );
 
@@ -360,3 +373,4 @@ class GFHANNANSMS_Pro {
 		return false;
 	}
 }
+
