@@ -1,461 +1,339 @@
-<?php if ( ! defined( 'ABSPATH' ) ) {
-	exit;
+<?php
+if (!defined('ABSPATH')) {
+    exit;
 }
 
-class GFHANNANSMS_Form_Send {
-
-	public static function construct() {
-
-		add_filter( 'gform_confirmation', array( __CLASS__, 'after_submit' ), 9999999, 4 );
-		add_action( 'gform_post_payment_status', array( __CLASS__, 'after_payment' ), 999999, 4 );
-		add_action( 'gform_paypal_fulfillment', array( __CLASS__, 'paypal_fulfillment' ), 999999, 4 );
-		add_filter( 'gform_replace_merge_tags', array( __CLASS__, 'tags' ), 99999, 7 );
-
-		/*
-		if ( version_compare(GFCommon::$version, '1.9.10.21', '>=')) {
-			add_action('gform_post_payment_action', array(__CLASS__, 'payment_action'), 10, 2);
-		}
-		*/
-	}
-
-	public static function Send( $to, $msg, $from = '', $form_id = '', $entry_id = '', $verify_code = '' ) {
-		$settings = GFHANNANSMS_Pro::get_option();
-		//$default_froms = array();
-		$default_froms = explode( ',', $settings["from"] );
-		$default_from  = $default_froms[0];
-		$to            = self::change_mobile( $to, '' );
-		$from          = ( ! empty( $from ) && $from != '' ) ? $from : $default_from;
-		$result        = GFHANNANSMS_Pro_WebServices::action( $settings, "send", $from, $to, $msg );
-		if ( $result == 'OK' ) {
-			GFHANNANSMS_Pro_SQL::save_sms_sent( $form_id, $entry_id, $from, $to, $msg, $verify_code );
-		}
-
-		return $result;
-	}
-
-
-	public static function change_mobile( $mobile = '', $code = '' ) {
-
-		if ( empty( $mobile ) ) {
-			return '';
-		}
-
-		if ( empty( $code ) ) {
-			$settings = GFHANNANSMS_Pro::get_option();
-			if ( ! empty( $settings["code"] ) ) {
-				$code = $settings["code"];
-			}
-		}
-
-		if ( strpos( $mobile, ',' ) === false ) {
-			return self::change_mobile_separately( $mobile, $code );
-		} else {
-			$mobiles = explode( ',', $mobile );
-			$changed = array();
-			foreach ( (array) $mobiles as $mobile ) {
-				$changed[] = self::change_mobile_separately( $mobile, $code );
-			}
-
-			return str_replace( ',,', ',', implode( ',', $changed ) );
-		}
-
-	}
-
-	public static function change_mobile_separately( $mobile = '', $code = '' ) {
-
-		if ( empty( $mobile ) ) {
-			return '';
-		}
-
-		if ( empty( $code ) ) {
-			$settings = GFHANNANSMS_Pro::get_option();
-			if ( ! empty( $settings["code"] ) ) {
-				$code = $settings["code"];
-			}
-		}
-
-		$phone = '';
-		preg_match_all( '/\d+/', $mobile, $matches );
-		if ( ! empty( $matches[0] ) ) {
-			foreach ( (array) $matches[0] as $number ) {
-				$phone .= $number;
-			}
-		}
-
-		if ( strpos( $mobile, '+' ) !== false || stripos( $mobile, '%2B' ) !== false ) {
-			return '+' . $phone;
-		} else if ( substr( $phone, 0, 2 ) == '00' ) {
-			return '+' . substr( $phone, 2 );
-		} else if ( substr( $phone, 0, 1 ) == '0' ) {
-			$phone = substr( $phone, 1 );
-		}
-
-		$code = substr( $code, 0, 1 ) == '+' ? $code : '+' . $code;
-
-		return $code . $phone;
-	}
-
-
-	public static function save_number_to_meta( $entry, $form ) {
-
-		if ( ! is_numeric( $form["id"] ) ) {
-			return;
-		}
-
-		$feeds = GFHANNANSMS_Pro_SQL::get_feed_via_formid( $form["id"], true );
-
-		$numbers = array();
-		foreach ( (array) $feeds as $feed ) {
-
-			if ( ! is_numeric( $feed["id"] ) ) {
-				break;
-			}
-
-			$code = $static_code = '';
-			if ( ! empty( $feed["meta"]["gf_sms_change_code"] ) ) {
-
-				if ( empty( $feed["meta"]["gf_change_code_type"] ) || ( ! empty( $feed["meta"]["gf_change_code_type"] ) && $feed["meta"]["gf_change_code_type"] != 'dyn' ) ) {
-					$static_code = $code = ! empty( $feed["meta"]["gf_code_static"] ) ? $feed["meta"]["gf_code_static"] : '';
-				} else {
-					$code = sanitize_text_field( rgpost( 'input_' . str_replace( ".", "_", $feed["meta"]["gf_code_dyn"] ) ) );
-				}
-			}
-
-			$client1 = $client2 = $sep = '';
-
-			if ( isset( $feed["meta"]["customer_field_clientnum"] ) && rgpost( 'input_' . str_replace( ".", "_", $feed["meta"]["customer_field_clientnum"] ) ) ) {
-				$client1 = self::change_mobile( sanitize_text_field( rgpost( 'input_' . str_replace( ".", "_", $feed["meta"]["customer_field_clientnum"] ) ) ), $code );
-			}
-
-			if ( ! empty( $feed["meta"]["to_c"] ) ) {
-				$client2 = self::change_mobile( $feed["meta"]["to_c"], $static_code );
-			}
-
-			if ( ! empty( $client1 ) && ! empty( $client2 ) ) {
-				$sep = ",";
-			}
-
-			$client = $client1 . $sep . $client2;
-			if ( $client != '' ) {
-				$numbers[] = $client;
-				gform_update_meta( $entry["id"], "client_mobile_number_" . $feed["id"], $client );
-			}
-
-		}
-
-		$numbers = array_unique( $numbers );
-		$numbers = str_replace( ',,', ',', implode( ',', $numbers ) );
-		if ( ! empty( $numbers ) ) {
-			gform_update_meta( $entry["id"], "client_mobile_numbers", $numbers );
-		}
-	}
-
-
-	public static function has_credit_card( $form ) {
-		foreach ( $form["fields"] as $field ) {
-			if ( $field["type"] == "creditcard" ) {
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	public static function after_submit( $confirmation, $form, $entry, $ajax ) {
-		self::save_number_to_meta( $entry, $form );
-		self::send_sms_form( $entry, $form, '-', 'immediately' );
-
-		return $confirmation;
-	}
-
-	public static function after_payment( $config, $entry, $status, $transaction_id ) {
-		$form = RGFormsModel::get_form_meta( $entry['form_id'] );
-		//	self::save_number_to_meta($entry, $form);
-		self::send_sms_form( $entry, $form, strtolower( $status ), 'after_payment' );
-	}
-
-	public static function paypal_fulfillment( $entry, $config, $transaction_id, $amount ) {
-		$form = RGFormsModel::get_form_meta( $entry['form_id'] );
-		//	self::save_number_to_meta($entry, $form);
-		self::send_sms_form( $entry, $form, 'completed', 'fulfillment' );
-	}
-
-	/*
-	public static function payment_action( $entry, $action ) {
-		$form = GFAPI::get_form( $entry['form_id'] );
-		GFAPI::send_notifications( $form, $entry, rgar( $action, 'type' ) );
-	}
-	*/
-
-	public static function send_sms_form( $entry, $form, $status, $function_time ) {
-
-		if ( ! is_numeric( $form["id"] ) ) {
-			return;
-		}
-
-		$settings = GFHANNANSMS_Pro::get_option();
-
-		if ( empty( $settings["ws"] ) || $settings["ws"] == 'no' ) {
-			RGFormsModel::add_note( $entry["id"], 0, __( 'SMS Pro', 'GF_SMS' ), __( 'No Gateway found.', 'GF_SMS' ) );
-
-			return;
-		}
-
-		$feeds  = GFHANNANSMS_Pro_SQL::get_feed_via_formid( $form["id"], true );
-		$status = strtolower( $status );
-
-		foreach ( (array) $feeds as $feed ) {
-
-			if ( ! is_numeric( $feed["id"] ) ) {
-				break;
-			}
-
-			$sent = gform_get_meta( $entry["id"], "gf_hannansms_sent_" . $feed["id"] );
-			if ( $sent == 'yes' ) {
-				continue;
-			}
-
-			$feed_when = isset( $feed["meta"]["when"] ) ? $feed["meta"]["when"] : '';
-			$sending   = 'yes';
-
-			if ( $feed_when == 'after_pay_success' ) {
-				if ( ( $function_time == 'immediately' ) || ! ( $status == 'completed' || $status == 'complete' || $status == 'paid' || $status == 'active' || $status == 'actived' || $status == 'approved' || $status == 'approve' ) ) {
-					$sending = 'no';
-				}
-			}
-
-			if ( $feed_when == 'after_pay' ) {
-				if ( $function_time == 'immediately' ) {
-					$sending = 'no';
-				}
-			}
-
-			if ( $function_time == 'fulfillment' ) {
-				$sending = 'yes';
-			}
-
-			if ( self::has_credit_card( $form ) ) {
-				$sending = 'yes';
-				if ( $feed_when == 'after_pay_success' ) {
-					$payment_status = ! empty( $entry["payment_status"] ) ? strtolower( $entry["payment_status"] ) : '';
-					if ( ! empty( $payment_status ) && ! ( $payment_status == 'completed' || $payment_status == 'complete' || $payment_status == 'paid' || $payment_status == 'active' || $payment_status == 'actived' || $payment_status == 'approved' || $payment_status == 'approve' ) ) {
-						$sending = 'no';
-					}
-				}
-			}
-
-			$gateway = gform_get_meta( $entry['id'], 'payment_gateway' ) ? 'yes' : 'no';
-			if ( $gateway == 'no' && empty( $entry['payment_method'] ) ) {
-				$sending = 'yes';
-			}
-
-			if ( ! ( isset( $feed["meta"]["gf_sms_is_gateway_checked"] ) && $feed["meta"]["gf_sms_is_gateway_checked"] ) ) {
-				$sending = 'yes';
-			}
-
-			$sending = apply_filters( 'gf_sms_sending_control', $sending );
-
-			if ( $sending == 'no' ) {
-				continue;
-			}
-
-			gform_update_meta( $entry["id"], "gf_hannansms_sent_" . $feed["id"], "yes" );
-			$from    = isset( $feed["meta"]["from"] ) ? $feed["meta"]["from"] : '';
-			$from_db = get_option( "gf_sms_last_sender" );
-			if ( $from and ( $from_db != $from ) ) {
-				update_option( "gf_sms_last_sender", $from );
-			}
-
-
-			if ( self::check_condition( $entry, $form, $feed, 'admin' ) ) {
-
-				$admin_msg    = GFCommon::replace_variables( $feed["meta"]["message"], $form, $entry, false, true, false, 'text' );
-				$admin_number = isset( $feed["meta"]["to"] ) ? $feed["meta"]["to"] : '';
-				$admin_number = self::change_mobile( $admin_number, '' );
-				if ( $admin_number and $admin_number != '' ) {
-
-					$result = GFHANNANSMS_Pro_WebServices::action( $settings, 'send', $from, $admin_number, $admin_msg );
-
-					if ( $result == 'OK' ) {
-						$admin_sender = $from;
-						$admin_fault  = '';
-						$admin_note   = __( 'Feed %s => SMS sent to Admin successfully. Admin Number : %s | Sender Number : %s %s | Message Body : %s', 'GF_SMS' );
-						GFHANNANSMS_Pro_SQL::save_sms_sent( $form['id'], $entry['id'], $from, $admin_number, $admin_msg, '' );
-					} else {
-						$admin_sender = $from;
-						$admin_fault  = $result;
-						$admin_note   = __( 'Feed %s => The sending of the message to Admin encountered an error. Admin Number : %s | Sender Number : %s | Reason : %s | Message Body : %s', 'GF_SMS' );
-					}
-				} else {
-					$admin_sender = '';
-					$admin_fault  = '';
-					$admin_number = '';
-					$admin_msg    = '';
-					$admin_note   = __( 'Feed %s => Admin SMS is disabled or Admin number is empty.%s%s%s%s', 'GF_SMS' );
-				}
-
-				$admin_msg = str_ireplace( array( '<br>', '<br/>', '<br />' ), '', $admin_msg );
-				RGFormsModel::add_note( $entry["id"], 0, __( 'SMS Pro', 'GF_SMS' ), sprintf( ( $admin_note ), $feed["id"], $admin_number, $admin_sender, $admin_fault, $admin_msg ) );
-			}
-
-			if ( self::check_condition( $entry, $form, $feed, 'client' ) ) {
-
-				$client_msg    = GFCommon::replace_variables( $feed["meta"]["message_c"], $form, $entry, false, true, false, 'text' );
-				$client_number = "client_mobile_number_" . $feed["id"];
-
-				if ( gform_get_meta( $entry["id"], $client_number ) ) {
-
-					$client_number = gform_get_meta( $entry["id"], $client_number );
-					$result        = GFHANNANSMS_Pro_WebServices::action( $settings, 'send', $from, $client_number, $client_msg );
-					$result        = ( isset( $result ) || $result ) ? $result : '';
-
-					if ( $result == 'OK' ) {
-						$client_sender = $from;
-						$client_fault  = '';
-						$client_note   = __( 'Feed %s => SMS sent to user successfully. User Number : %s | Sender Number : %s %s | Message Body : %s', 'GF_SMS' );
-						GFHANNANSMS_Pro_SQL::save_sms_sent( $form['id'], $entry['id'], $from, $client_number, $client_msg, '' );
-					} else {
-						$client_sender = $from;
-						$client_fault  = $result;
-						$client_note   = __( 'Feed %s => The sending of the message to user encountered an error. User Number : %s | Sender Number : %s | Reason : %s | Message Body : %s', 'GF_SMS' );
-					}
-				} else {
-					$client_sender = '';
-					$client_fault  = '';
-					$client_number = '';
-					$client_msg    = '';
-					$client_note   = __( 'Feed %s => User SMS is disabled or user number is empty.%s%s%s%s', 'GF_SMS' );
-				}
-
-				$client_msg = str_ireplace( array( '<br>', '<br/>', '<br />' ), '', $client_msg );
-				RGFormsModel::add_note( $entry["id"], 0, __( 'SMS Pro', 'GF_SMS' ), sprintf( ( $client_note ), $feed["id"], $client_number, $client_sender, $client_fault, $client_msg ) );
-			}
-		}
-	}
-
-	public static function tags( $text, $form, $entry, $url_encode, $esc_html, $nl2br, $format ) {
-
-		$payment_gateway = '{payment_gateway}';
-		$payment_status  = '{payment_status}';
-		$transaction_id  = '{transaction_id}';
-
-		if ( strpos( $text, $payment_gateway ) === false && strpos( $text, $payment_status ) === false && strpos( $text, $transaction_id ) === false ) {
-			return $text;
-		}
-
-		$entry_id = rgar( $entry, 'id' );
-		$entry    = GFAPI::get_entry( $entry_id );
-		if ( is_wp_error( $entry ) ) {
-			$entry = false;
-		}
-
-		if ( strpos( $text, $payment_gateway ) === false ) {
-			$payment_gateway = '';
-		} else {
-			$payment_gateway = gform_get_meta( $entry['id'], 'payment_gateway' ) ? gform_get_meta( $entry['id'], 'payment_gateway' ) : ( isset( $entry['payment_method'] ) ? $entry['payment_method'] : '' );
-		}
-
-
-		if ( strpos( $text, $transaction_id ) === false ) {
-			$transaction_id = '';
-		} else {
-			$transaction_id = isset( $entry['transaction_id'] ) ? $entry['transaction_id'] : '';
-		}
-
-		if ( strpos( $text, $payment_status ) === false ) {
-			$payment_status = '';
-		} else {
-			$payment_status = isset( $entry['payment_status'] ) ? $entry['payment_status'] : '';
-		}
-
-		$custom_merge_tag = array(
-			'{payment_gateway}',
-			'{payment_status}',
-			'{transaction_id}',
-		);
-
-		$values = array(
-			ucfirst( $payment_gateway ),
-			ucfirst( $payment_status ),
-			$transaction_id,
-		);
-
-		$text = str_replace( $custom_merge_tag, $values, $text );
-
-		return $text;
-	}
-
-	public static function check_condition( $entry, $form, $config, $who = '' ) {
-
-		if ( empty( $config['meta'] ) ) {
-			return false;
-		}
-
-		if ( empty( $config['meta'][ $who . 'sms_conditional_enabled' ] ) ) {
-			return true;
-		}
-
-		if ( ! empty( $config['meta'][ $who . 'sms_conditional_field_id' ] ) ) {
-			$conditions = $config['meta'][ $who . 'sms_conditional_field_id' ];
-			if ( ! is_array( $conditions ) ) {
-				$conditions = array( '1' => $conditions );
-			}
-		} else {
-			return true;
-		}
-
-		if ( ! empty( $config['meta'][ $who . 'sms_conditional_value' ] ) ) {
-			$condition_values = $config['meta'][ $who . 'sms_conditional_value' ];
-			if ( ! is_array( $condition_values ) ) {
-				$condition_values = array( '1' => $condition_values );
-			}
-		} else {
-			$condition_values = array( '1' => '' );
-		}
-
-		if ( ! empty( $config['meta'][ $who . 'sms_conditional_operator' ] ) ) {
-			$condition_operators = $config['meta'][ $who . 'sms_conditional_operator' ];
-			if ( ! is_array( $condition_operators ) ) {
-				$condition_operators = array( '1' => $condition_operators );
-			}
-		} else {
-			$condition_operators = array( '1' => 'is' );
-		}
-
-		$type = ! empty( $config['meta'][ $who . 'sms_conditional_type' ] ) ? strtolower( $config['meta'][ $who . 'sms_conditional_type' ] ) : '';
-		$type = $type == 'all' ? 'all' : 'any';
-
-		foreach ( $conditions as $i => $field_id ) {
-
-			if ( empty( $field_id ) ) {
-				continue;
-			}
-
-			$field = RGFormsModel::get_field( $form, $field_id );
-			if ( empty( $field ) ) {
-				continue;
-			}
-
-			$value    = ! empty( $condition_values[ '' . $i . '' ] ) ? $condition_values[ '' . $i . '' ] : '';
-			$operator = ! empty( $condition_operators[ '' . $i . '' ] ) ? $condition_operators[ '' . $i . '' ] : 'is';
-
-			$is_visible     = ! RGFormsModel::is_field_hidden( $form, $field, array() );
-			$field_value    = GFFormsModel::get_lead_field_value( $entry, $field );
-			$is_value_match = RGFormsModel::is_value_match( $field_value, $value, $operator );
-
-			$check = $is_value_match && $is_visible;
-
-			if ( $type == 'any' && $check ) {
-				return true;
-			} else if ( $type == 'all' && ! $check ) {
-				return false;
-			}
-		}
-
-		if ( $type == 'any' ) {
-			return false;
-		} else {
-			return true;
-		}
-	}
+class GF_MESSAGEWAY_Form_Send
+{
+    public static function construct()
+    {
+        // هوک‌های اصلی گرویتی فرم برای زمان‌های مختلف ارسال
+        add_filter('gform_confirmation', array(__CLASS__, 'after_submit'), 9999999, 4);
+        add_action('gform_post_payment_status', array(__CLASS__, 'after_payment'), 999999, 4);
+        add_action('gform_paypal_fulfillment', array(__CLASS__, 'paypal_fulfillment'), 999999, 4);
+        
+        // جایگزینی متغیرها
+        add_filter('gform_replace_merge_tags', array(__CLASS__, 'tags'), 99999, 7);
+    }
+
+    /**
+     * تابع اصلی ارسال پیامک
+     */
+    public static function Send($to, $msg, $from = '', $form_id = '', $entry_id = '', $verify_code = '')
+    {
+        $settings = GF_MESSAGEWAY::get_option();
+        
+        // تعیین فرستنده پیش‌فرض
+        $default_froms = explode(',', isset($settings["from"]) ? $settings["from"] : '');
+        $default_from = trim($default_froms[0]);
+        
+        // اگر فرستنده خاصی پاس داده نشده، از پیش‌فرض استفاده کن
+        $from = (!empty($from)) ? $from : $default_from;
+
+        // نرمال‌سازی شماره گیرنده
+        $to = self::change_mobile($to);
+        if (empty($to)) {
+            return 'شماره گیرنده نامعتبر است.';
+        }
+
+        // ارسال به وب‌سرویس (Gateway)
+        $result = GF_MESSAGEWAY_WebServices::action($settings, "send", $from, $to, $msg);
+
+        // ذخیره در دیتابیس لاگ‌ها
+        if ($result == 'OK' || strpos($result, 'OK') !== false) {
+            GF_MESSAGEWAY_SQL::save_sms_sent($form_id, $entry_id, $from, $to, $msg, $verify_code);
+        } else {
+            // می‌توان خطاهای ناموفق را هم لاگ کرد (اختیاری)
+            // GF_MESSAGEWAY_SQL::save_sms_sent($form_id, $entry_id, $from, $to, $msg . " [Error: $result]", $verify_code);
+        }
+
+        return $result;
+    }
+
+    /**
+     * نرمال‌سازی و استانداردسازی شماره موبایل
+     */
+    public static function change_mobile($mobile = '', $code = '')
+    {
+        if (empty($mobile)) {
+            return '';
+        }
+
+        // اگر چندین شماره با کاما جدا شده‌اند، بازگشتی انجام بده
+        if (strpos($mobile, ',') !== false) {
+            $mobiles = explode(',', $mobile);
+            $clean_mobiles = array();
+            foreach ($mobiles as $m) {
+                $clean = self::change_mobile_separately($m, $code);
+                if ($clean) $clean_mobiles[] = $clean;
+            }
+            return implode(',', array_unique($clean_mobiles));
+        }
+
+        return self::change_mobile_separately($mobile, $code);
+    }
+
+    /**
+     * پردازش تکی شماره موبایل
+     */
+    private static function change_mobile_separately($mobile, $code_override = '')
+    {
+        // تبدیل اعداد فارسی/عربی به انگلیسی
+        $persian = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
+        $arabic = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+        $english = range(0, 9);
+        
+        $mobile = str_replace($persian, $english, $mobile);
+        $mobile = str_replace($arabic, $english, $mobile);
+        
+        // حذف کاراکترهای غیر عددی به جز +
+        $mobile = preg_replace('/[^0-9+]/', '', $mobile);
+        
+        if (empty($mobile)) return '';
+
+        // دریافت کد کشور از تنظیمات اگر اورراید نشده باشد
+        if (empty($code_override)) {
+            $settings = GF_MESSAGEWAY::get_option();
+            $code_override = !empty($settings["code"]) ? $settings["code"] : '+98';
+        }
+
+        // اگر شماره با + شروع شده، استاندارد است
+        if (strpos($mobile, '+') === 0) {
+            return $mobile;
+        }
+
+        // اگر با 00 شروع شده، تبدیل به + شود
+        if (strpos($mobile, '00') === 0) {
+            return '+' . substr($mobile, 2);
+        }
+
+        // اگر با 0 شروع شده، 0 را حذف کن و کد کشور را اضافه کن (فرض بر شماره داخلی)
+        if (strpos($mobile, '0') === 0) {
+            $mobile = substr($mobile, 1);
+        }
+
+        // اطمینان از وجود + در کد کشور
+        $code_override = (strpos($code_override, '+') !== 0) ? '+' . $code_override : $code_override;
+
+        return $code_override . $mobile;
+    }
+
+    // --- توابع هوک گرویتی فرم ---
+
+    public static function save_number_to_meta($entry, $form)
+    {
+        if (!isset($form["id"]) || !is_numeric($form["id"])) return;
+
+        $feeds = GF_MESSAGEWAY_SQL::get_feed_via_formid($form["id"], true);
+        $all_numbers = array();
+
+        foreach ((array)$feeds as $feed) {
+            if (!isset($feed["id"]) || !is_numeric($feed["id"])) continue;
+
+            // استخراج شماره از فیلد داینامیک فرم
+            $client_number = '';
+            
+            // 1. بررسی فیلد مپ شده برای شماره کاربر
+            if (isset($feed["meta"]["customer_field_clientnum"])) {
+                $field_id = $feed["meta"]["customer_field_clientnum"];
+                $raw_val = rgpost('input_' . str_replace(".", "_", $field_id));
+                if ($raw_val) {
+                    $client_number = self::change_mobile(sanitize_text_field($raw_val));
+                }
+            }
+
+            // 2. بررسی شماره‌های ثابت اضافی (Extra Numbers)
+            $extra_numbers = !empty($feed["meta"]["to_c"]) ? self::change_mobile($feed["meta"]["to_c"]) : '';
+
+            $final_client_numbers = array_filter(array_merge(
+                explode(',', $client_number), 
+                explode(',', $extra_numbers)
+            ));
+
+            if (!empty($final_client_numbers)) {
+                $joined = implode(',', $final_client_numbers);
+                $all_numbers[] = $joined;
+                // ذخیره متای مخصوص این فید (برای استفاده در لاجیک ارسال)
+                gform_update_meta($entry["id"], "client_mobile_number_" . $feed["id"], $joined);
+            }
+        }
+
+        // ذخیره کلیه شماره‌ها در متای اصلی (برای دسترسی‌های عمومی)
+        if (!empty($all_numbers)) {
+            $unique_all = implode(',', array_unique(explode(',', implode(',', $all_numbers))));
+            gform_update_meta($entry["id"], "client_mobile_numbers", $unique_all);
+        }
+    }
+
+    public static function after_submit($confirmation, $form, $entry, $ajax)
+    {
+        self::save_number_to_meta($entry, $form);
+        self::process_feeds($entry, $form, 'submit');
+        return $confirmation;
+    }
+
+    public static function after_payment($entry, $config, $status, $transaction_id)
+    {
+        $form = GFAPI::get_form($entry['form_id']);
+        // وضعیت پرداخت را در متا آپدیت کنیم تا در Logic بررسی شود (هرچند گرویتی خودکار انجام می‌دهد)
+        $entry['payment_status'] = $status;
+        self::process_feeds($entry, $form, 'payment_status_changed', strtolower($status));
+    }
+
+    public static function paypal_fulfillment($entry, $config, $transaction_id, $amount)
+    {
+        $form = GFAPI::get_form($entry['form_id']);
+        self::process_feeds($entry, $form, 'fulfillment', 'completed');
+    }
+
+    /**
+     * پردازش فیدها و ارسال پیامک بر اساس شرایط
+     */
+    public static function process_feeds($entry, $form, $event, $payment_status = '')
+    {
+        if (!isset($form["id"])) return;
+
+        $settings = GF_MESSAGEWAY::get_option();
+        if (empty($settings["ws"]) || $settings["ws"] == 'no') {
+            return; // درگاه فعال نیست
+        }
+
+        $feeds = GF_MESSAGEWAY_SQL::get_feed_via_formid($form["id"], true);
+
+        foreach ((array)$feeds as $feed) {
+            if (!isset($feed["is_active"]) || !$feed["is_active"]) continue;
+
+            // جلوگیری از ارسال تکراری برای یک فید خاص
+            if (gform_get_meta($entry["id"], "gf_smspanel_sent_" . $feed["id"]) == 'yes') {
+               // continue; // در نسخه جدید شاید بخواهیم در مراحل مختلف پیامک‌های مختلف بفرستیم، پس این شرط ساده را دقیق‌تر می‌کنیم:
+               // فعلا برای سادگی فرض می‌کنیم هر فید فقط یکبار اجرا شود.
+               // اگر نیاز به ارسال پیامک‌های متفاوت در وضعیت‌های مختلف پرداخت است، باید کلید متا یونیک‌تر باشد (مثلا ترکیب با وضعیت).
+            }
+
+            $feed_when = isset($feed["meta"]["when"]) ? $feed["meta"]["when"] : 'send_immediately';
+            
+            // بررسی زمان ارسال
+            $should_send = false;
+
+            if ($feed_when == 'send_immediately' && $event == 'submit') {
+                $should_send = true;
+            } 
+            elseif ($feed_when == 'after_pay' && ($event == 'payment_status_changed' || $event == 'fulfillment')) {
+                // ارسال در هر وضعیت پرداختی (موفق یا ناموفق)
+                $should_send = true;
+            }
+            elseif ($feed_when == 'after_pay_success') {
+                // فقط پرداخت موفق
+                $valid_statuses = ['paid', 'completed', 'active', 'approved'];
+                if (in_array(strtolower($payment_status), $valid_statuses)) {
+                    $should_send = true;
+                }
+            }
+
+            // فیلتر برای توسعه‌دهندگان جهت تغییر منطق ارسال
+            $should_send = apply_filters('gf_sms_should_send_feed', $should_send, $feed, $entry, $form);
+
+            if (!$should_send) continue;
+
+            // علامت‌گذاری به عنوان "در حال پردازش"
+            gform_update_meta($entry["id"], "gf_smspanel_sent_" . $feed["id"], "yes");
+            
+            $from = isset($feed["meta"]["from"]) ? $feed["meta"]["from"] : '';
+
+            // --- ارسال به مدیر ---
+            if (self::check_condition($entry, $form, $feed, 'adminsms_')) {
+                $admin_msg = GFCommon::replace_variables($feed["meta"]["message"], $form, $entry);
+                $admin_to = isset($feed["meta"]["to"]) ? $feed["meta"]["to"] : '';
+                
+                if (!empty($admin_to)) {
+                    $res = self::Send($admin_to, $admin_msg, $from, $form['id'], $entry['id']);
+                    $note = ($res == 'OK' || strpos($res, 'OK') !== false) ? 
+                        sprintf(__('پیامک به مدیر ارسال شد. (%s)', 'GF_SMS'), $admin_to) : 
+                        sprintf(__('خطا در ارسال پیامک مدیر: %s', 'GF_SMS'), $res);
+                    RGFormsModel::add_note($entry["id"], 0, 'SMS', $note);
+                }
+            }
+
+            // --- ارسال به کاربر ---
+            if (self::check_condition($entry, $form, $feed, 'clientsms_')) {
+                $client_msg = GFCommon::replace_variables($feed["meta"]["message_c"], $form, $entry);
+                $client_to_meta_key = "client_mobile_number_" . $feed["id"];
+                $client_to = gform_get_meta($entry["id"], $client_to_meta_key);
+
+                if (!empty($client_to)) {
+                    $res = self::Send($client_to, $client_msg, $from, $form['id'], $entry['id']);
+                    $note = ($res == 'OK' || strpos($res, 'OK') !== false) ? 
+                        sprintf(__('پیامک به کاربر ارسال شد. (%s)', 'GF_SMS'), $client_to) : 
+                        sprintf(__('خطا در ارسال پیامک کاربر: %s', 'GF_SMS'), $res);
+                    RGFormsModel::add_note($entry["id"], 0, 'SMS', $note);
+                }
+            }
+        }
+    }
+
+    /**
+     * بررسی منطق شرطی (Conditional Logic)
+     */
+    public static function check_condition($entry, $form, $feed, $prefix = 'adminsms_')
+    {
+        $enabled_key = $prefix . 'conditional_enabled';
+        
+        // اگر شرط فعال نشده، پس ارسال مجاز است
+        if (empty($feed['meta'][$enabled_key])) {
+            return true;
+        }
+
+        // استفاده از کلاس منطق شرطی خود گرویتی فرم اگر در دسترس باشد
+        // اما چون ساختار ذخیره شده در این افزونه کمی متفاوت است، دستی بررسی می‌کنیم
+        
+        $type = isset($feed['meta'][$prefix . 'conditional_type']) ? $feed['meta'][$prefix . 'conditional_type'] : 'all';
+        $conditions_fields = isset($feed['meta'][$prefix . 'conditional_field_id']) ? $feed['meta'][$prefix . 'conditional_field_id'] : [];
+        $conditions_ops = isset($feed['meta'][$prefix . 'conditional_operator']) ? $feed['meta'][$prefix . 'conditional_operator'] : [];
+        $conditions_vals = isset($feed['meta'][$prefix . 'conditional_value']) ? $feed['meta'][$prefix . 'conditional_value'] : [];
+
+        if (empty($conditions_fields)) return true;
+
+        $match_count = 0;
+        $total_conditions = 0;
+
+        foreach ($conditions_fields as $i => $field_id) {
+            if (empty($field_id)) continue;
+            $total_conditions++;
+
+            $field = RGFormsModel::get_field($form, $field_id);
+            $field_value = RGFormsModel::get_lead_field_value($entry, $field);
+            
+            $target_value = isset($conditions_vals[$i]) ? $conditions_vals[$i] : '';
+            $operator = isset($conditions_ops[$i]) ? $conditions_ops[$i] : 'is';
+
+            if (RGFormsModel::is_value_match($field_value, $target_value, $operator)) {
+                $match_count++;
+            }
+        }
+
+        if ($type == 'all') {
+            return $match_count == $total_conditions;
+        } else { // any
+            return $match_count > 0;
+        }
+    }
+
+    /**
+     * جایگزینی تگ‌های اختصاصی (مثل وضعیت پرداخت)
+     */
+    public static function tags($text, $form, $entry, $url_encode, $esc_html, $nl2br, $format)
+    {
+        // تگ‌های پیش‌فرض گرویتی کار می‌کنند، اینجا فقط تگ‌های خاص اضافه می‌شود
+        $custom_tags = array(
+            '{payment_gateway}' => rgar($entry, 'payment_method'),
+            '{payment_status}'  => rgar($entry, 'payment_status'),
+            '{transaction_id}'  => rgar($entry, 'transaction_id'),
+        );
+
+        foreach ($custom_tags as $tag => $value) {
+            $text = str_replace($tag, $value, $text);
+        }
+        
+        return $text;
+    }
 }

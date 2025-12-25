@@ -1,1 +1,1 @@
-<?php die( 'silence is golden' );
+<?php die('silence is golden');
