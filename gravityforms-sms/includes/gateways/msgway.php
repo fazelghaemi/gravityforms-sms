@@ -213,7 +213,7 @@ class GF_MESSAGEWAY_MSGWay
     public static function getCredit($apiKey)
     {
          // چون API جدید متد مشخصی برای دریافت اعتبار عددی ساده ندارد، لینک نمایش داده می‌شود
-        return '<a href="https://panel.msgway.com" target="_blank" style="text-decoration:none;">مشاهده در پنل کاربری</a>';
+        return '<a href="https://www.msgway.com/r/lr" target="_blank" style="text-decoration:none;">مشاهده در پنل کاربری</a>';
     }
 
     /**

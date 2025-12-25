@@ -1,12 +1,23 @@
 <?php
+/**
+ * تنظیمات افزونه پیامک گرویتی فرم
+ * @package    Gravity Forms SMS - MsgWay
+ * @author     Ready Studio <info@readystudio.ir>
+ * @license    GPL-2.0+
+ */
+
 if (!defined('ABSPATH')) {
     exit;
 }
 
+// افزودن تولتیپ‌ها
 add_filter('gform_tooltips', array('GF_MESSAGEWAY_Settings', 'tooltips'));
 
 class GF_MESSAGEWAY_Settings
 {
+    /**
+     * بررسی سطح دسترسی کاربر
+     */
     protected static function check_access($required_permission)
     {
         if (!function_exists('wp_get_current_user')) {
@@ -15,6 +26,9 @@ class GF_MESSAGEWAY_Settings
         return GFCommon::current_user_can_any($required_permission);
     }
 
+    /**
+     * تعریف تولتیپ‌های راهنما
+     */
     public static function tooltips($tooltips)
     {
         $tooltips["admin_default"] = __("شماره موبایل مدیران جهت دریافت پیامک. می‌توانید چند شماره را با کاما (,) جدا کنید. مثال: 09121234567,09191234567", "GF_SMS");
@@ -23,7 +37,7 @@ class GF_MESSAGEWAY_Settings
         
         $tooltips["country_code"] = __("کد کشور پیش‌فرض برای شماره‌هایی که بدون کد وارد می‌شوند (مثال: +98).", "GF_SMS");
         
-        $tooltips["gf_sms_sender"] = __("شماره‌های فرستنده را با کاما (,) جدا کنید.<br>برای استفاده از <strong>پیام‌رسان‌ها</strong> یا <strong>تماس صوتی</strong>، عبارات زیر را وارد کنید:<br><code>eitaa</code>, <code>bale</code>, <code>gap</code>, <code>igap</code>, <code>rubika</code>, <code>ivr</code><br>مثال: 300012345,eitaa,ivr", "GF_SMS");
+        $tooltips["gf_sms_sender"] = __("انتخاب خط یا سرویس‌دهنده‌ای که پیام‌ها از طریق آن ارسال می‌شوند.", "GF_SMS");
         
         $tooltips["show_adminbar"] = __("نمایش منوی پیامک در نوار ابزار مدیریت وردپرس.", "GF_SMS");
         
@@ -32,11 +46,48 @@ class GF_MESSAGEWAY_Settings
         return $tooltips;
     }
 
+    /**
+     * رندر صفحه تنظیمات
+     */
     public static function settings()
     {
-        // لود استایل‌های مورد نیاز (Chosen حذف شد اگر از Select2 بومی گرویتی استفاده شود، اما فعلاً نگه می‌داریم)
+        // لود اسکریپت Chosen برای سلکت‌باکس‌های زیبا
         wp_enqueue_script('GF_SMS_Chosen', GF_SMS_URL . '/assets/chosen_v1.8.5/chosen.jquery.min.js', array('jquery'), '1.8.5', true);
         wp_enqueue_style('GF_SMS_Chosen', GF_SMS_URL . '/assets/chosen_v1.8.5/chosen.min.css');
+        
+        // استایل‌های اختصاصی ردی استودیو
+        ?>
+        <style>
+            .ready-studio-header {
+                background: #fff;
+                border: 1px solid #ccd0d4;
+                border-right: 4px solid #0073aa;
+                padding: 15px;
+                margin-bottom: 20px;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                box-shadow: 0 1px 1px rgba(0,0,0,.04);
+            }
+            .ready-studio-header h2 { margin: 0; padding: 0; font-size: 18px; line-height: 1.4; }
+            .rs-credit { font-size: 12px; color: #666; }
+            .rs-credit a { text-decoration: none; color: #0073aa; }
+            
+            .form-table th { width: 250px; font-weight: 600; }
+            .chosen-container { min-width: 300px; }
+            
+            /* استایل باکس اعتبار */
+            .msgway-credit-box {
+                background: #e7f5fe;
+                color: #0c5460;
+                border: 1px solid #bde0f7;
+                padding: 10px 15px;
+                border-radius: 4px;
+                margin-bottom: 20px;
+                display: inline-block;
+            }
+        </style>
+        <?php
 
         $settings = GF_MESSAGEWAY::get_option();
         $current_gateway_slug = rgget('gateway') ? sanitize_text_field(rgget('gateway')) : (!empty($settings["ws"]) ? $settings["ws"] : '');
@@ -58,7 +109,7 @@ class GF_MESSAGEWAY_Settings
                 foreach ((array)GF_MESSAGEWAY_WebServices::get() as $code => $name) {
                     delete_option("gf_smspanel_" . strtolower($code));
                 }
-                $plugin = "msgway-gravity-sms/msgway_gravity_sms.php"; // مسیر نسبی فایل اصلی
+                $plugin = "msgway-gravity-sms/msgway_gravity_sms.php"; 
                 deactivate_plugins($plugin);
                 echo '<div class="updated fade" style="padding:20px;">' . __("افزونه با موفقیت حذف و اطلاعات پاکسازی شد.", "GF_SMS") . '</div>';
                 return;
@@ -70,9 +121,9 @@ class GF_MESSAGEWAY_Settings
             check_admin_referer("update", "gf_smspanel_update");
             
             $new_settings = array(
-                "user_name" => sanitize_text_field(rgpost("gf_smspanel_user_name")), // برای درگاه‌های قدیمی
-                "password" => sanitize_text_field(rgpost("gf_smspanel_password")),   // برای درگاه‌های قدیمی
-                "from" => sanitize_text_field(rgpost("gf_smspanel_from")),
+                "user_name" => sanitize_text_field(rgpost("gf_smspanel_user_name")), 
+                "password" => sanitize_text_field(rgpost("gf_smspanel_password")),   
+                "from" => sanitize_text_field(rgpost("gf_smspanel_from")), // اینجا مقدار انتخابی (کد یا آلیاس) ذخیره می‌شود
                 "code" => sanitize_text_field(rgpost("gf_smspanel_code")),
                 "to" => sanitize_text_field(rgpost("gf_smspanel_to")),
                 "ws" => sanitize_text_field(rgpost("gf_smspanel_ws")),
@@ -96,18 +147,25 @@ class GF_MESSAGEWAY_Settings
                 }
             }
 
-            echo '<div class="updated fade" style="padding:6px">' . __("تنظیمات با موفقیت ذخیره شد.", "GF_SMS") . '</div>';
+            echo '<div class="updated fade" style="padding:10px; border-left: 4px solid #46b450; background: #fff; margin: 10px 0;">' . __("تنظیمات با موفقیت ذخیره شد.", "GF_SMS") . '</div>';
             $settings = $new_settings; // رفرش متغیر برای نمایش
             $gateway_options = get_option("gf_smspanel_" . $current_gateway_slug);
         }
         ?>
 
         <div class="wrap">
-            <h2>
-                <i class="fa fa-mobile" style="font-size: 24px; vertical-align: middle;"></i>
-                <?php _e("تنظیمات پیامک گرویتی فرم (نسخه راه‌پیام)", "GF_SMS"); ?>
-            </h2>
-            <hr>
+            
+            <div class="ready-studio-header">
+                <div>
+                    <h2>
+                        <i class="dashicons dashicons-email-alt" style="vertical-align: middle; font-size: 24px;"></i>
+                        <?php _e("تنظیمات عمومی پیامک گرویتی فرم (راه‌پیام)", "GF_SMS"); ?>
+                    </h2>
+                </div>
+                <div class="rs-credit">
+                    Design & Dev by <a href="https://readystudio.ir" target="_blank">Ready Studio</a>
+                </div>
+            </div>
 
             <?php
             // نمایش اعتبار
@@ -115,14 +173,12 @@ class GF_MESSAGEWAY_Settings
                 if ($current_gateway_slug == strtolower($settings["ws"])) {
                     $credit = GF_MESSAGEWAY::credit(true);
                     if ($credit) {
-                        // چون درگاه راه‌پیام لینک HTML برمی‌گرداند، آن را نمایش می‌دهیم
-                        // اگر عدد بود، رنگ‌بندی اعمال می‌شود
                         $is_numeric = is_numeric(strip_tags($credit));
                         $style = $is_numeric ? '' : 'font-weight:bold;';
                         ?>
-                        <div style="background: #fff; padding: 15px; border-left: 4px solid #00a0d2; box-shadow: 0 1px 1px rgba(0,0,0,.04); margin-bottom: 20px;">
+                        <div class="msgway-credit-box">
                             <?php _e("اعتبار پنل پیامک:", "GF_SMS") ?> 
-                            <span style="<?php echo $style; ?> color: #0073aa; margin-right: 10px;"><?php echo $credit; ?></span>
+                            <span style="<?php echo $style; ?> margin-right: 10px;"><?php echo $credit; ?></span>
                         </div>
                         <?php
                     }
@@ -144,11 +200,11 @@ class GF_MESSAGEWAY_Settings
                                     <option value="<?php echo esc_attr($code) ?>" <?php selected($current_gateway_slug, $code); ?>><?php echo esc_html($name) ?></option>
                                 <?php } ?>
                             </select>
-                            <p class="description"><?php _e("لطفاً درگاه MsgWay (راه‌پیام) را انتخاب کنید.", "GF_SMS"); ?></p>
+                            <p class="description"><?php _e("لطفاً درگاه راه پیام (MsgWay) را انتخاب کنید.", "GF_SMS"); ?></p>
                         </td>
                     </tr>
 
-                    <!-- فیلدهای اختصاصی درگاه -->
+                    <!-- فیلدهای اختصاصی درگاه (API Key) -->
                     <?php
                     if (!empty($current_gateway_slug) && $current_gateway_slug != 'no') {
                         $Gateway_Class = 'GF_MESSAGEWAY_' . strtoupper($current_gateway_slug);
@@ -184,19 +240,60 @@ class GF_MESSAGEWAY_Settings
                         </td>
                     </tr>
 
-                    <!-- فرستنده -->
+                    <!-- فرستنده (Provider Selection) -->
                     <tr>
                         <th scope="row">
                             <label for="gf_smspanel_from">
-                                <?php _e("شماره فرستنده (From)", "GF_SMS"); ?>
+                                <?php _e("شماره/سرویس فرستنده", "GF_SMS"); ?>
                                 <?php gform_tooltip('gf_sms_sender') ?>
                             </label>
                         </th>
                         <td>
-                            <input type="text" id="gf_smspanel_from" name="gf_smspanel_from"
-                                   value="<?php echo !empty($settings["from"]) ? esc_attr($settings["from"]) : ''; ?>" 
-                                   class="regular-text" style="direction:ltr !important; text-align:left;"/>
-                            <p class="description">برای ارسال پیامک، شماره اختصاصی (مثال: 3000xxxxx) و برای پیام‌رسان‌ها نام آن‌ها (مثال: eitaa, bale) را وارد کنید.</p>
+                            <select id="gf_smspanel_from" name="gf_smspanel_from" class="select-gateway" style="width:350px;">
+                                <option value=""><?php _e("انتخاب کنید...", "GF_SMS"); ?></option>
+                                
+                                <optgroup label="<?php _e("پیامک (SMS)", "GF_SMS"); ?>">
+                                    <option value="1" <?php selected(isset($settings["from"]) ? $settings["from"] : '', '1'); ?>>
+                                        <?php _e("اپراتور مگفا (کد 1 - سرشماره 3000)", "GF_SMS"); ?>
+                                    </option>
+                                    <option value="2000" <?php selected(isset($settings["from"]) ? $settings["from"] : '', '2000'); ?>>
+                                        <?php _e("اپراتور آتیه (کد 2 - سرشماره 2000)", "GF_SMS"); ?>
+                                    </option>
+                                    <option value="3" <?php selected(isset($settings["from"]) ? $settings["from"] : '', '3'); ?>>
+                                        <?php _e("اپراتور آسیاتک (کد 3 - سرشماره 9000)", "GF_SMS"); ?>
+                                    </option>
+                                    <option value="5" <?php selected(isset($settings["from"]) ? $settings["from"] : '', '5'); ?>>
+                                        <?php _e("اپراتور ارمغان راه طلایی (کد 5 - سرشماره 50004)", "GF_SMS"); ?>
+                                    </option>
+                                </optgroup>
+
+                                <optgroup label="<?php _e("پیام‌رسان‌ها (Messenger)", "GF_SMS"); ?>">
+                                    <option value="gap" <?php selected(isset($settings["from"]) ? $settings["from"] : '', 'gap'); ?>>
+                                        <?php _e("پیام‌رسان گپ (کد 2)", "GF_SMS"); ?>
+                                    </option>
+                                    <option value="igap" <?php selected(isset($settings["from"]) ? $settings["from"] : '', 'igap'); ?>>
+                                        <?php _e("پیام‌رسان آیگپ (کد 8)", "GF_SMS"); ?>
+                                    </option>
+                                    <option value="eitaa" <?php selected(isset($settings["from"]) ? $settings["from"] : '', 'eitaa'); ?>>
+                                        <?php _e("پیام‌رسان ایتا (کد 9)", "GF_SMS"); ?>
+                                    </option>
+                                    <option value="bale" <?php selected(isset($settings["from"]) ? $settings["from"] : '', 'bale'); ?>>
+                                        <?php _e("پیام‌رسان بله (کد 10)", "GF_SMS"); ?>
+                                    </option>
+                                    <option value="rubika" <?php selected(isset($settings["from"]) ? $settings["from"] : '', 'rubika'); ?>>
+                                        <?php _e("پیام‌رسان روبیکا (کد 12)", "GF_SMS"); ?>
+                                    </option>
+                                </optgroup>
+
+                                <optgroup label="<?php _e("تماس صوتی", "GF_SMS"); ?>">
+                                    <option value="ivr" <?php selected(isset($settings["from"]) ? $settings["from"] : '', 'ivr'); ?>>
+                                        <?php _e("ارسال صوتی (IVR)", "GF_SMS"); ?>
+                                    </option>
+                                </optgroup>
+                            </select>
+                            <p class="description">
+                                <?php _e("سرویس‌دهنده پیش‌فرض را انتخاب کنید. در صورت نیاز به تغییر در هر فرم، می‌توانید در تنظیمات فید آن فرم، سرویس دیگری را انتخاب کنید.", "GF_SMS"); ?>
+                            </p>
                         </td>
                     </tr>
 
@@ -247,7 +344,7 @@ class GF_MESSAGEWAY_Settings
                     <tr>
                         <th scope="row"></th>
                         <td>
-                            <input type="submit" name="gf_smspanel_submit" class="button button-primary" value="<?php _e("ذخیره تنظیمات", "GF_SMS") ?>"/>
+                            <input type="submit" name="gf_smspanel_submit" class="button button-primary button-large" value="<?php _e("ذخیره تنظیمات", "GF_SMS") ?>"/>
                         </td>
                     </tr>
 
@@ -266,6 +363,10 @@ class GF_MESSAGEWAY_Settings
                     <?php } ?>
                 </form>
             </div>
+            
+            <div style="text-align:center; color:#999; margin-top:20px; font-size:11px;">
+                Ready Studio Gravity Forms SMS Addon
+            </div>
         </div>
 
         <script type="text/javascript">
@@ -275,8 +376,13 @@ class GF_MESSAGEWAY_Settings
                 window.location.href = url.href;
             }
             jQuery(document).ready(function($) {
+                // فعال‌سازی Chosen برای همه سلکت‌های کلاس select-gateway
                 if($.fn.chosen) {
-                    $(".select-gateway").chosen({rtl: <?php echo is_rtl() ? 'true' : 'false'; ?>});
+                    $(".select-gateway").chosen({
+                        rtl: <?php echo is_rtl() ? 'true' : 'false'; ?>,
+                        width: "350px",
+                        no_results_text: "<?php _e('موردی یافت نشد', 'GF_SMS'); ?>"
+                    });
                 }
             });
         </script>
