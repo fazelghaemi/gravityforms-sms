@@ -1,50 +1,72 @@
 <?php
+/**
+ * مدیریت ارسال پیامک (Send Logic)
+ * پردازش فیدها، بررسی شرایط، جایگزینی متغیرها و ارسال نهایی
+ * * @package    Gravity Forms SMS - MsgWay
+ * @author     Ready Studio <info@readystudio.ir>
+ * @license    GPL-2.0+
+ */
+
 if (!defined('ABSPATH')) {
     exit;
 }
 
 class GF_MESSAGEWAY_Form_Send
 {
+    /**
+     * راه‌اندازی و تعریف هوک‌ها
+     */
     public static function construct()
     {
-        // هوک‌های اصلی گرویتی فرم برای زمان‌های مختلف ارسال
-        add_filter('gform_confirmation', array(__CLASS__, 'after_submit'), 9999999, 4);
-        add_action('gform_post_payment_status', array(__CLASS__, 'after_payment'), 999999, 4);
-        add_action('gform_paypal_fulfillment', array(__CLASS__, 'paypal_fulfillment'), 999999, 4);
+        // 1. هوک ارسال فرم (بعد از ذخیره ورودی)
+        add_filter('gform_confirmation', array(__CLASS__, 'after_submit'), 10, 4);
         
-        // جایگزینی متغیرها
-        add_filter('gform_replace_merge_tags', array(__CLASS__, 'tags'), 99999, 7);
+        // 2. هوک تغییر وضعیت پرداخت (برای درگاه‌ها)
+        add_action('gform_post_payment_status', array(__CLASS__, 'after_payment'), 10, 3);
+        
+        // 3. هوک تکمیل پرداخت (ادان‌های استاندارد مثل پی‌پال)
+        add_action('gform_paypal_fulfillment', array(__CLASS__, 'paypal_fulfillment'), 10, 4);
+        
+        // 4. فیلتر جایگزینی تگ‌های اختصاصی (رفع باگ نال)
+        add_filter('gform_replace_merge_tags', array(__CLASS__, 'tags'), 10, 7);
     }
 
     /**
-     * تابع اصلی ارسال پیامک
+     * تابع اصلی ارسال پیامک (Static Wrapper)
+     * این تابع توسط بخش‌های مختلف (وریفای، ارسال مجدد، فیدها) صدا زده می‌شود
+     * * @param string $to شماره گیرنده
+     * @param string $msg متن پیام
+     * @param string $from فرستنده (اختیاری)
+     * @param int $form_id شناسه فرم (اختیاری)
+     * @param int $entry_id شناسه ورودی (اختیاری)
      */
-    public static function Send($to, $msg, $from = '', $form_id = '', $entry_id = '', $verify_code = '')
+    public static function Send($to, $msg, $from = '', $form_id = 0, $entry_id = 0)
     {
         $settings = GF_MESSAGEWAY::get_option();
         
-        // تعیین فرستنده پیش‌فرض
-        $default_froms = explode(',', isset($settings["from"]) ? $settings["from"] : '');
-        $default_from = trim($default_froms[0]);
-        
-        // اگر فرستنده خاصی پاس داده نشده، از پیش‌فرض استفاده کن
-        $from = (!empty($from)) ? $from : $default_from;
+        // تعیین فرستنده
+        // اگر فرستنده خاصی در آرگومان‌ها نبود، از تنظیمات کلی بخوان
+        if (empty($from)) {
+            $from = isset($settings["from"]) ? $settings["from"] : '';
+            // اگر تنظیمات کلی هم چندتایی بود (CSV)، اولی را به عنوان پیش‌فرض بردار
+            $froms = explode(',', $from);
+            $from = trim($froms[0]);
+        }
 
         // نرمال‌سازی شماره گیرنده
         $to = self::change_mobile($to);
         if (empty($to)) {
-            return 'شماره گیرنده نامعتبر است.';
+            return __('شماره گیرنده نامعتبر است.', 'GF_SMS');
         }
 
-        // ارسال به وب‌سرویس (Gateway)
+        // ارسال به وب‌سرویس از طریق کلاس گیت‌وی
         $result = GF_MESSAGEWAY_WebServices::action($settings, "send", $from, $to, $msg);
 
-        // ذخیره در دیتابیس لاگ‌ها
-        if ($result == 'OK' || strpos($result, 'OK') !== false) {
-            GF_MESSAGEWAY_SQL::save_sms_sent($form_id, $entry_id, $from, $to, $msg, $verify_code);
-        } else {
-            // می‌توان خطاهای ناموفق را هم لاگ کرد (اختیاری)
-            // GF_MESSAGEWAY_SQL::save_sms_sent($form_id, $entry_id, $from, $to, $msg . " [Error: $result]", $verify_code);
+        // لاگ کردن نتیجه در دیتابیس
+        // معمولا درگاه‌های ما "OK" یا کد عددی برمی‌گردانند، یا متن خطا
+        // اگر نتیجه شامل خطا نباشد، لاگ می‌کنیم (یا همه را لاگ می‌کنیم)
+        if (class_exists('GF_MESSAGEWAY_SQL')) {
+            GF_MESSAGEWAY_SQL::save_sms_sent($form_id, $entry_id, $from, $to, $msg, $result);
         }
 
         return $result;
@@ -53,287 +75,289 @@ class GF_MESSAGEWAY_Form_Send
     /**
      * نرمال‌سازی و استانداردسازی شماره موبایل
      */
-    public static function change_mobile($mobile = '', $code = '')
+    public static function change_mobile($mobile)
     {
-        if (empty($mobile)) {
-            return '';
-        }
+        if (empty($mobile)) return '';
 
-        // اگر چندین شماره با کاما جدا شده‌اند، بازگشتی انجام بده
+        // اگر چندین شماره با کاما جدا شده‌اند، بازگشتی حل کن
         if (strpos($mobile, ',') !== false) {
             $mobiles = explode(',', $mobile);
             $clean_mobiles = array();
             foreach ($mobiles as $m) {
-                $clean = self::change_mobile_separately($m, $code);
-                if ($clean) $clean_mobiles[] = $clean;
+                $c = self::change_mobile($m);
+                if ($c) $clean_mobiles[] = $c;
             }
             return implode(',', array_unique($clean_mobiles));
         }
 
-        return self::change_mobile_separately($mobile, $code);
-    }
+        // استفاده از متد استاندارد کلاس درگاه اصلی (اگر در دسترس باشد)
+        // این بهترین روش است چون منطق یکپارچه می‌ماند
+        if (class_exists('GF_MESSAGEWAY_MSGWay') && method_exists('GF_MESSAGEWAY_MSGWay', 'mobileNormalize')) {
+            return GF_MESSAGEWAY_MSGWay::mobileNormalize($mobile);
+        }
 
-    /**
-     * پردازش تکی شماره موبایل
-     */
-    private static function change_mobile_separately($mobile, $code_override = '')
-    {
-        // تبدیل اعداد فارسی/عربی به انگلیسی
+        // فال‌بک (اگر کلاس درگاه لود نشده باشد)
+        // تبدیل اعداد فارسی به انگلیسی
         $persian = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
-        $arabic = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
         $english = range(0, 9);
-        
         $mobile = str_replace($persian, $english, $mobile);
-        $mobile = str_replace($arabic, $english, $mobile);
         
-        // حذف کاراکترهای غیر عددی به جز +
         $mobile = preg_replace('/[^0-9+]/', '', $mobile);
         
-        if (empty($mobile)) return '';
-
-        // دریافت کد کشور از تنظیمات اگر اورراید نشده باشد
-        if (empty($code_override)) {
-            $settings = GF_MESSAGEWAY::get_option();
-            $code_override = !empty($settings["code"]) ? $settings["code"] : '+98';
+        // اصلاح فرمت ایران
+        if (preg_match('/^(?:\+98|0098|98|0)?(9\d{9})$/', $mobile, $matches)) {
+            return '+98' . $matches[1];
         }
-
-        // اگر شماره با + شروع شده، استاندارد است
-        if (strpos($mobile, '+') === 0) {
-            return $mobile;
-        }
-
-        // اگر با 00 شروع شده، تبدیل به + شود
-        if (strpos($mobile, '00') === 0) {
-            return '+' . substr($mobile, 2);
-        }
-
-        // اگر با 0 شروع شده، 0 را حذف کن و کد کشور را اضافه کن (فرض بر شماره داخلی)
-        if (strpos($mobile, '0') === 0) {
-            $mobile = substr($mobile, 1);
-        }
-
-        // اطمینان از وجود + در کد کشور
-        $code_override = (strpos($code_override, '+') !== 0) ? '+' . $code_override : $code_override;
-
-        return $code_override . $mobile;
+        
+        return $mobile;
     }
 
-    // --- توابع هوک گرویتی فرم ---
+    // =========================================================================
+    // هوک‌های گرویتی فرم
+    // =========================================================================
 
-    public static function save_number_to_meta($entry, $form)
-    {
-        if (!isset($form["id"]) || !is_numeric($form["id"])) return;
-
-        $feeds = GF_MESSAGEWAY_SQL::get_feed_via_formid($form["id"], true);
-        $all_numbers = array();
-
-        foreach ((array)$feeds as $feed) {
-            if (!isset($feed["id"]) || !is_numeric($feed["id"])) continue;
-
-            // استخراج شماره از فیلد داینامیک فرم
-            $client_number = '';
-            
-            // 1. بررسی فیلد مپ شده برای شماره کاربر
-            if (isset($feed["meta"]["customer_field_clientnum"])) {
-                $field_id = $feed["meta"]["customer_field_clientnum"];
-                $raw_val = rgpost('input_' . str_replace(".", "_", $field_id));
-                if ($raw_val) {
-                    $client_number = self::change_mobile(sanitize_text_field($raw_val));
-                }
-            }
-
-            // 2. بررسی شماره‌های ثابت اضافی (Extra Numbers)
-            $extra_numbers = !empty($feed["meta"]["to_c"]) ? self::change_mobile($feed["meta"]["to_c"]) : '';
-
-            $final_client_numbers = array_filter(array_merge(
-                explode(',', $client_number), 
-                explode(',', $extra_numbers)
-            ));
-
-            if (!empty($final_client_numbers)) {
-                $joined = implode(',', $final_client_numbers);
-                $all_numbers[] = $joined;
-                // ذخیره متای مخصوص این فید (برای استفاده در لاجیک ارسال)
-                gform_update_meta($entry["id"], "client_mobile_number_" . $feed["id"], $joined);
-            }
-        }
-
-        // ذخیره کلیه شماره‌ها در متای اصلی (برای دسترسی‌های عمومی)
-        if (!empty($all_numbers)) {
-            $unique_all = implode(',', array_unique(explode(',', implode(',', $all_numbers))));
-            gform_update_meta($entry["id"], "client_mobile_numbers", $unique_all);
-        }
-    }
-
+    /**
+     * هوک بعد از ثبت فرم (Confirmation)
+     */
     public static function after_submit($confirmation, $form, $entry, $ajax)
     {
-        self::save_number_to_meta($entry, $form);
-        self::process_feeds($entry, $form, 'submit');
+        // پردازش فیدها با رویداد 'submit'
+        self::process_feeds($form, $entry, 'submit');
         return $confirmation;
     }
 
-    public static function after_payment($entry, $config, $status, $transaction_id)
+    /**
+     * هوک تغییر وضعیت پرداخت (Payment Status Changed)
+     */
+    public static function after_payment($entry, $config, $status)
     {
         $form = GFAPI::get_form($entry['form_id']);
-        // وضعیت پرداخت را در متا آپدیت کنیم تا در Logic بررسی شود (هرچند گرویتی خودکار انجام می‌دهد)
+        // آپدیت وضعیت در آبجکت entry برای استفاده در منطق ارسال
         $entry['payment_status'] = $status;
-        self::process_feeds($entry, $form, 'payment_status_changed', strtolower($status));
-    }
-
-    public static function paypal_fulfillment($entry, $config, $transaction_id, $amount)
-    {
-        $form = GFAPI::get_form($entry['form_id']);
-        self::process_feeds($entry, $form, 'fulfillment', 'completed');
+        self::process_feeds($form, $entry, 'payment_status');
     }
 
     /**
-     * پردازش فیدها و ارسال پیامک بر اساس شرایط
+     * هوک تکمیل پرداخت (PayPal Fulfillment)
      */
-    public static function process_feeds($entry, $form, $event, $payment_status = '')
+    public static function paypal_fulfillment($entry, $config, $transaction_id, $amount)
     {
-        if (!isset($form["id"])) return;
+        $form = GFAPI::get_form($entry['form_id']);
+        // فرض بر این است که تکمیل یعنی پرداخت موفق
+        $entry['payment_status'] = 'Paid';
+        self::process_feeds($form, $entry, 'payment_status');
+    }
 
-        $settings = GF_MESSAGEWAY::get_option();
-        if (empty($settings["ws"]) || $settings["ws"] == 'no') {
-            return; // درگاه فعال نیست
-        }
+    // =========================================================================
+    // پردازش منطق ارسال (Feeds Logic)
+    // =========================================================================
 
-        $feeds = GF_MESSAGEWAY_SQL::get_feed_via_formid($form["id"], true);
+    /**
+     * پردازش تمام فیدهای متصل به فرم و ارسال در صورت تطابق شرایط
+     */
+    private static function process_feeds($form, $entry, $event)
+    {
+        if (!isset($form['id'])) return;
 
-        foreach ((array)$feeds as $feed) {
-            if (!isset($feed["is_active"]) || !$feed["is_active"]) continue;
+        // دریافت فیدهای فعال این فرم
+        $feeds = GF_MESSAGEWAY_SQL::get_feed_via_formid($form['id'], true);
 
-            // جلوگیری از ارسال تکراری برای یک فید خاص
-            if (gform_get_meta($entry["id"], "gf_smspanel_sent_" . $feed["id"]) == 'yes') {
-               // continue; // در نسخه جدید شاید بخواهیم در مراحل مختلف پیامک‌های مختلف بفرستیم، پس این شرط ساده را دقیق‌تر می‌کنیم:
-               // فعلا برای سادگی فرض می‌کنیم هر فید فقط یکبار اجرا شود.
-               // اگر نیاز به ارسال پیامک‌های متفاوت در وضعیت‌های مختلف پرداخت است، باید کلید متا یونیک‌تر باشد (مثلا ترکیب با وضعیت).
-            }
-
-            $feed_when = isset($feed["meta"]["when"]) ? $feed["meta"]["when"] : 'send_immediately';
+        foreach ($feeds as $feed) {
+            $meta = $feed['meta'];
             
-            // بررسی زمان ارسال
+            // 1. بررسی زمان ارسال (Trigger Check)
+            $when = isset($meta['when']) ? $meta['when'] : 'send_immediately';
+            $payment_status = isset($entry['payment_status']) ? strtolower($entry['payment_status']) : '';
+            
             $should_send = false;
 
-            if ($feed_when == 'send_immediately' && $event == 'submit') {
-                $should_send = true;
-            } 
-            elseif ($feed_when == 'after_pay' && ($event == 'payment_status_changed' || $event == 'fulfillment')) {
-                // ارسال در هر وضعیت پرداختی (موفق یا ناموفق)
-                $should_send = true;
-            }
-            elseif ($feed_when == 'after_pay_success') {
-                // فقط پرداخت موفق
-                $valid_statuses = ['paid', 'completed', 'active', 'approved'];
-                if (in_array(strtolower($payment_status), $valid_statuses)) {
+            if ($event == 'submit') {
+                // در مرحله سابمیت هستیم
+                if ($when == 'send_immediately') {
+                    // بررسی شرط "فقط در صورت اتصال به درگاه"
+                    // اگر این تیک خورده باشد، نباید در سابمیت عادی ارسال کنیم (چون هنوز پرداخت نشده)
+                    // مگر اینکه فرم اصلا درگاه نداشته باشد؟ خیر، منطق میگوید صبر کن.
+                    $is_gateway_condition = !empty($meta['gf_sms_is_gateway_checked']);
+                    
+                    if (!$is_gateway_condition) {
+                        $should_send = true;
+                    }
+                }
+            } elseif ($event == 'payment_status') {
+                // در مرحله تغییر وضعیت پرداخت هستیم
+                if ($when == 'after_pay') {
+                    // هر وضعیتی (موفق یا ناموفق)
+                    $should_send = true;
+                } elseif ($when == 'after_pay_success') {
+                    // فقط موفق
+                    if (in_array($payment_status, array('paid', 'completed', 'active', 'approved'))) {
+                        $should_send = true;
+                    }
+                } elseif ($when == 'send_immediately' && !empty($meta['gf_sms_is_gateway_checked'])) {
+                    // اگر کاربر گفته "بلافاصله" ولی تیک "همراه با درگاه" را زده، اینجا فرصت ارسال است
+                    // (معمولا بهتر است "بعد از پرداخت" را انتخاب کند، اما این یک فال‌بک است)
                     $should_send = true;
                 }
             }
 
-            // فیلتر برای توسعه‌دهندگان جهت تغییر منطق ارسال
-            $should_send = apply_filters('gf_sms_should_send_feed', $should_send, $feed, $entry, $form);
-
             if (!$should_send) continue;
 
-            // علامت‌گذاری به عنوان "در حال پردازش"
-            gform_update_meta($entry["id"], "gf_smspanel_sent_" . $feed["id"], "yes");
-            
-            $from = isset($feed["meta"]["from"]) ? $feed["meta"]["from"] : '';
+            // 2. پردازش پیامک مدیر
+            self::process_admin_sms($feed, $form, $entry);
 
-            // --- ارسال به مدیر ---
-            if (self::check_condition($entry, $form, $feed, 'adminsms_')) {
-                $admin_msg = GFCommon::replace_variables($feed["meta"]["message"], $form, $entry);
-                $admin_to = isset($feed["meta"]["to"]) ? $feed["meta"]["to"] : '';
-                
-                if (!empty($admin_to)) {
-                    $res = self::Send($admin_to, $admin_msg, $from, $form['id'], $entry['id']);
-                    $note = ($res == 'OK' || strpos($res, 'OK') !== false) ? 
-                        sprintf(__('پیامک به مدیر ارسال شد. (%s)', 'GF_SMS'), $admin_to) : 
-                        sprintf(__('خطا در ارسال پیامک مدیر: %s', 'GF_SMS'), $res);
-                    RGFormsModel::add_note($entry["id"], 0, 'SMS', $note);
-                }
-            }
+            // 3. پردازش پیامک کاربر
+            self::process_client_sms($feed, $form, $entry);
+        }
+    }
 
-            // --- ارسال به کاربر ---
-            if (self::check_condition($entry, $form, $feed, 'clientsms_')) {
-                $client_msg = GFCommon::replace_variables($feed["meta"]["message_c"], $form, $entry);
-                $client_to_meta_key = "client_mobile_number_" . $feed["id"];
-                $client_to = gform_get_meta($entry["id"], $client_to_meta_key);
+    /**
+     * پردازش و ارسال پیامک مدیر
+     */
+    private static function process_admin_sms($feed, $form, $entry)
+    {
+        $meta = $feed['meta'];
+        $to = isset($meta['to']) ? $meta['to'] : '';
+        $msg = isset($meta['message']) ? $meta['message'] : '';
+        $from = isset($meta['from']) ? $meta['from'] : ''; // فرستنده اختصاصی فید
 
-                if (!empty($client_to)) {
-                    $res = self::Send($client_to, $client_msg, $from, $form['id'], $entry['id']);
-                    $note = ($res == 'OK' || strpos($res, 'OK') !== false) ? 
-                        sprintf(__('پیامک به کاربر ارسال شد. (%s)', 'GF_SMS'), $client_to) : 
-                        sprintf(__('خطا در ارسال پیامک کاربر: %s', 'GF_SMS'), $res);
-                    RGFormsModel::add_note($entry["id"], 0, 'SMS', $note);
-                }
+        if (empty($to) || empty($msg)) return;
+
+        // بررسی شرط (Conditional Logic)
+        if (!self::check_condition($feed, $form, $entry, 'adminsms')) return;
+
+        // جایگزینی متغیرها
+        $msg = GFCommon::replace_variables($msg, $form, $entry);
+        
+        // ارسال (پشتیبانی از چند گیرنده)
+        $recipients = explode(',', $to);
+        foreach ($recipients as $recipient) {
+            self::Send(trim($recipient), $msg, $from, $form['id'], $entry['id']);
+        }
+    }
+
+    /**
+     * پردازش و ارسال پیامک کاربر
+     */
+    private static function process_client_sms($feed, $form, $entry)
+    {
+        $meta = $feed['meta'];
+        $msg = isset($meta['message_c']) ? $meta['message_c'] : '';
+        $from = isset($meta['from']) ? $meta['from'] : '';
+
+        if (empty($msg)) return;
+
+        // یافتن شماره موبایل کاربر
+        $to = '';
+        
+        // الف) از فیلد انتخاب شده در تنظیمات فید
+        if (!empty($meta['customer_field_clientnum'])) {
+            $field_id = $meta['customer_field_clientnum'];
+            $field_val = rgar($entry, $field_id);
+            if ($field_val) $to = $field_val;
+        }
+
+        // ب) شماره‌های اضافی (CC)
+        $cc = isset($meta['to_c']) ? $meta['to_c'] : '';
+
+        // بررسی شرط
+        if (!self::check_condition($feed, $form, $entry, 'clientsms')) return;
+
+        // جایگزینی متغیرها
+        $msg = GFCommon::replace_variables($msg, $form, $entry);
+
+        // ارسال به کاربر اصلی
+        if (!empty($to)) {
+            self::Send($to, $msg, $from, $form['id'], $entry['id']);
+        }
+
+        // ارسال به گیرندگان CC
+        if (!empty($cc)) {
+            $ccs = explode(',', $cc);
+            foreach ($ccs as $cc_num) {
+                self::Send(trim($cc_num), $msg, $from, $form['id'], $entry['id']);
             }
         }
     }
 
     /**
-     * بررسی منطق شرطی (Conditional Logic)
+     * بررسی منطق شرطی
      */
-    public static function check_condition($entry, $form, $feed, $prefix = 'adminsms_')
+    private static function check_condition($feed, $form, $entry, $prefix)
     {
-        $enabled_key = $prefix . 'conditional_enabled';
-        
-        // اگر شرط فعال نشده، پس ارسال مجاز است
-        if (empty($feed['meta'][$enabled_key])) {
-            return true;
-        }
+        $meta = $feed['meta'];
+        $enabled = isset($meta[$prefix . '_conditional_enabled']) ? $meta[$prefix . '_conditional_enabled'] : false;
 
-        // استفاده از کلاس منطق شرطی خود گرویتی فرم اگر در دسترس باشد
-        // اما چون ساختار ذخیره شده در این افزونه کمی متفاوت است، دستی بررسی می‌کنیم
-        
-        $type = isset($feed['meta'][$prefix . 'conditional_type']) ? $feed['meta'][$prefix . 'conditional_type'] : 'all';
-        $conditions_fields = isset($feed['meta'][$prefix . 'conditional_field_id']) ? $feed['meta'][$prefix . 'conditional_field_id'] : [];
-        $conditions_ops = isset($feed['meta'][$prefix . 'conditional_operator']) ? $feed['meta'][$prefix . 'conditional_operator'] : [];
-        $conditions_vals = isset($feed['meta'][$prefix . 'conditional_value']) ? $feed['meta'][$prefix . 'conditional_value'] : [];
+        if (!$enabled) return true; // شرط غیرفعال است، پس ارسال مجاز است
 
-        if (empty($conditions_fields)) return true;
+        $type = isset($meta[$prefix . '_conditional_type']) ? $meta[$prefix . '_conditional_type'] : 'all';
+        $field_ids = isset($meta[$prefix . '_conditional_field_id']) ? $meta[$prefix . '_conditional_field_id'] : array();
+        $operators = isset($meta[$prefix . '_conditional_operator']) ? $meta[$prefix . '_conditional_operator'] : array();
+        $values = isset($meta[$prefix . '_conditional_value']) ? $meta[$prefix . '_conditional_value'] : array();
+
+        if (empty($field_ids)) return true;
 
         $match_count = 0;
-        $total_conditions = 0;
+        $conditions_count = 0;
 
-        foreach ($conditions_fields as $i => $field_id) {
+        foreach ($field_ids as $i => $field_id) {
             if (empty($field_id)) continue;
-            $total_conditions++;
-
-            $field = RGFormsModel::get_field($form, $field_id);
-            $field_value = RGFormsModel::get_lead_field_value($entry, $field);
             
-            $target_value = isset($conditions_vals[$i]) ? $conditions_vals[$i] : '';
-            $operator = isset($conditions_ops[$i]) ? $conditions_ops[$i] : 'is';
+            $conditions_count++;
+            
+            $operator = isset($operators[$i]) ? $operators[$i] : 'is';
+            $target_value = isset($values[$i]) ? $values[$i] : '';
+            
+            // دریافت فیلد و مقدار آن از Entry
+            $field = RGFormsModel::get_field($form, $field_id);
+            if (empty($field)) continue;
+            
+            // بررسی مخفی بودن فیلد (اختیاری)
+            // if (RGFormsModel::is_field_hidden($form, $field, array())) continue;
 
-            if (RGFormsModel::is_value_match($field_value, $target_value, $operator)) {
+            $source_value = RGFormsModel::get_lead_field_value($entry, $field);
+
+            if (RGFormsModel::is_value_match($source_value, $target_value, $operator)) {
                 $match_count++;
             }
         }
 
+        if ($conditions_count == 0) return true;
+
         if ($type == 'all') {
-            return $match_count == $total_conditions;
+            return $match_count == $conditions_count;
         } else { // any
             return $match_count > 0;
         }
     }
 
+    // =========================================================================
+    // توابع کمکی
+    // =========================================================================
+
     /**
-     * جایگزینی تگ‌های اختصاصی (مثل وضعیت پرداخت)
+     * جایگزینی تگ‌های اختصاصی و رفع مشکل Deprecated در PHP 8.1
      */
     public static function tags($text, $form, $entry, $url_encode, $esc_html, $nl2br, $format)
     {
-        // تگ‌های پیش‌فرض گرویتی کار می‌کنند، اینجا فقط تگ‌های خاص اضافه می‌شود
-        $custom_tags = array(
-            '{payment_gateway}' => rgar($entry, 'payment_method'),
-            '{payment_status}'  => rgar($entry, 'payment_status'),
-            '{transaction_id}'  => rgar($entry, 'transaction_id'),
+        // لیست تگ‌های اختصاصی این پلاگین
+        // استفاده از اپراتور نال سیف (??) یا کستینگ به string برای جلوگیری از خطای null
+        
+        $tags = array(
+            '{payment_status}' => isset($entry['payment_status']) ? (string)$entry['payment_status'] : '',
+            '{transaction_id}' => isset($entry['transaction_id']) ? (string)$entry['transaction_id'] : '',
+            '{entry_id}'       => isset($entry['id']) ? (string)$entry['id'] : '',
+            '{date_mdy}'       => isset($entry['date_created']) ? date_i18n('Y/m/d', strtotime($entry['date_created'])) : '',
+            '{ip}'             => isset($entry['ip']) ? (string)$entry['ip'] : '',
+            '{source_url}'     => isset($entry['source_url']) ? (string)$entry['source_url'] : '',
         );
 
-        foreach ($custom_tags as $tag => $value) {
-            $text = str_replace($tag, $value, $text);
+        // جایگزینی امن
+        foreach ($tags as $tag => $value) {
+            // اطمینان حاصل می‌کنیم که مقدار جایگزین حتماً رشته است
+            $safe_val = is_null($value) ? '' : $value;
+            $text = str_replace($tag, $safe_val, $text);
         }
-        
+
         return $text;
     }
 }
